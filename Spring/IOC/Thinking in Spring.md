@@ -1,7 +1,5 @@
 ## Thinking in Spring
 
-[TOC]
-
 ## 写在前面的话
 该怎么开始呢。Spring从出现到如今已经过了十几个年头，并经大师之手不断的雕琢，现在已然成为JavaEE企业级开发的明星框架。对于Spring，我常局限于日常在功能上的肤浅使用，或借助其中的工具来快速实现业务逻辑，虽每每得心应手，但却十有八九存有敬畏之感，心中对其内部的原理时有零零散散的感知，但却不成体系，不得轮廓。因此，基于自己的疑惑与不解，尝试去探索与学习，并以问答的形式来表达，记录我的思考。
 众所周知，Spring传播了一种叫控制反转或依赖注入的思想。看过一个比喻，在Spring的世界里，Bean就是演员，Context就是舞台，Core就是演员所需要的核心道具，而Bean、Context、Core这些组件就共同组成了一个IoC容器。演员可以借助道具在舞台上随意挥洒尽情表演，为观众带来很多享受，而IOC容器作为一种成功的软件工程产品，也能为我们带来灵活、便利的应用开发。 By 谢乐
@@ -30,14 +28,14 @@ DispatcherServlet -> FrameworkServlet -> HttpServletBean -> HttpServlet
 ```
         //从初始参数中设置bean属性
         //拿到ServletConfig, 并即获取到<init-param>中的值
-        PropertyValues pvs = new ServletConfigPropertyValues(getServletConfig(), this.requiredProperties); 
+        PropertyValues pvs = new ServletConfigPropertyValues(getServletConfig(), this.requiredProperties);
         //把当前Servlet包装成一个bean
             BeanWrapper bw = PropertyAccessorFactory.forBeanPropertyAccess(this);
             ResourceLoader resourceLoader = new ServletContextResourceLoader(getServletContext());
             bw.registerCustomEditor(Resource.class, new ResourceEditor(resourceLoader, this.environment));
             initBeanWrapper(bw);
             //根据参数名称，如contextConfigLocation，调用相应的set方法
-            bw.setPropertyValues(pvs, true); 
+            bw.setPropertyValues(pvs, true);
             // 让子类作个性化初始化
             initServletBean();
 ```
@@ -124,7 +122,7 @@ Map<String, BeanDefinition> beanDefinitionMap = new ConcurrentHashMap<String, Be
                     inputSource, getEntityResolver(), this.errorHandler, validationMode, isNamespaceAware());
         //注册Bean
        registerBeanDefinitions(doc, resource);
-        
+
 ```
 见名知意，便可知道registerBeanDefinitions方法完成了bean的注册，调用逻辑简要代码为：
 ```
@@ -215,7 +213,7 @@ for (String beanName : beanNames) {
     if (!bd.isAbstract() && bd.isSingleton() && !bd.isLazyInit()) {
         ...
         getBean(beanName);
-    } 
+    }
 }
 ```
 代码**主要**逻辑为：如果bean不是抽象类，而且是单例模式，同时还是非lazy-init, 则需要创建bean. 而默认情况下，bean对应的几个属性为(在RootBeanDefinition类中)：
@@ -248,7 +246,7 @@ Bean工厂通过getBean方法来主动实例化bean，然后再保存起来，�
 ```
 Bean工厂在载入XML文件时，会委托XmlBeanDefinitionReader来完成，在入口方法doLoadBeanDefinitions中，先通过documentLoader把XML文件渲染成一颗文档树，并封装到Document对象实例中，这个过程完成了XML文件的载入。然后就把文档树种中包含的Element节点解析成一个BeanDefinition。解析时，默认的DefaultBeanDefinitionDocumentReader只能处理的节点前缀主要有：
 ```
-        <beans> 
+        <beans>
         <alias>
         <import>
         <bean>  
@@ -256,7 +254,7 @@ Bean工厂在载入XML文件时，会委托XmlBeanDefinitionReader来完成，�
 所以，默认的DocumentReader不能识别`<context:component-scan>`, 因此需要新增一个解析处理器。我们需要为配置文件添加自定义的命名空间和schema路径，形如：
 ```
 <?xml version="1.0" encoding="UTF-8"?>
-<beans 
+<beans
        xmlns:context="http://www.springframework.org/schema/context"
        xsi:schemaLocation="
        http://www.springframework.org/schema/context
@@ -459,5 +457,3 @@ class ConditionB implements ConditionHandler{
 我们想要基于Spring作扩展，我们想借用Spring的IoC，但是我们不能修过Spring的代码，我们能作的，就是做自己的事，不打扰别人，这就是涵养，这就是开闭原则。
 
 最后，士不可以不弘毅，任重而道远。
-
-
