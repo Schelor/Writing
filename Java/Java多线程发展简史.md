@@ -402,8 +402,106 @@ JSR 133重新明确了Java内存模型，事实上，在这之前，常见的内
 ### JSR 166
 JSR 166的贡献就是引入了java.util.concurrent这个包。前面曾经讲解过AtomicXXX类这种原子类型，内部实现保证其原子性的其实是通过一个compareAndSet(x,y)方法（CAS），而这个方法追踪到最底层，是通过CPU的一个单独的指令来实现的。这个方法所做的事情，就是保证在某变量取值为x的情况下，将取值x替换为y。在这个过程中，并没有任何加锁的行为，所以一般它的性能要比使用synchronized高。
 
-Lock-free算法就是基于CAS来实现原子化“set”的方式，通常有这样两种形式：
+Lock-free算法就是基于CAS来实现原子化“set”的方式，比较常用的方式如下：
 ```java
+private AtomicInteger updater = new AtomicInteger();
 
+public void set(int newValue) {
+    int current;
+    do {
+        current = updater.get();
+        if (newValue <= current) {
+            break;
+        }
+    } while (!updater.compareAndSet(current, newValue));
+}
 
 ```
+CAS操作有一种场景是ABA问题。借用四火举的栈的例子：
+![](./aba_stack.png)
+
+1.线程t1先查看了一下栈的情况，发现栈里面有A、B两个元素，栈顶是A，这是它所期望的，它现在很想用CAS的方法把A pop出去。
+
+2.这时候线程t2来了，它pop出A、B，又push一个C进去，再把A push回去，这时候栈里面存放了A、C两个元素，栈顶还是A。
+
+3.t1开始使用CAS：head.compareAndSet(A,B)，把A pop出去了，栈里就剩下B了，可是这时候其实已经发生了错误，因为C丢失了。
+
+为什么会发生这样的错误？因为对t1来说，它两次都查看到栈顶的A，以为期间没有发生变化，而实际上呢？实际上已经发生了变化，C进来、B出去了，但是t1它只看栈顶是A，它并不知道曾经发生了什么。
+那么，有什么办法可以解决这个问题呢？
+
+最常见的办法是使用一个计数器，对这个栈只要有任何的变化，就触发计数器+1，t1在要查看A的状态，不如看一下计数器的情况，如果计数器没有变化，说明期间没有别人动过这个栈。JDK 5.0里面提供的AtomicStampedReference就是起这个用的。
+
+JDK5中还引入了一些线程安全的容器:
+![](./jdk5_collection.png)
+
+其中：
+- unsafe这一列的容器都是JDK之前版本有的，且非线程安全的；
+- synchronized这一列的容器都是JDK之前版本有的，且通过synchronized的关键字同步方式来保证线程安全的；
+- concurrent pkg一列的容器都是并发包新加入的容器，都是线程安全，但是都没有使用同步来实现线程安全。
+
+再说一下对于线程池的支持。在说线程池之前，得明确一下Future的概念。Future也是JDK 5.0新增的类，是一个用来整合同步和异步的结果对象。一个异步任务的执行通过Future对象立即返回，如果你期望以同步方式获取结果，只需要调用它的get方法，直到结果取得才会返回给你，否则线程会一直hang在那里。Future可以看做是JDK为了它的线程模型做的一个部分修复，因为程序员以往在考虑多线程的时候，并不能够以面向对象的思路去完成它，而不得不考虑很多面向线程的行为，但是Future和后面要讲到的Barrier等类，可以让这些特定情况下，程序员可以从繁重的线程思维中解脱出来。把线程控制的部分和业务逻辑的部分解耦开。
+```java
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
+public class FutureUsage {
+
+    public static void main(String[] args) {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+
+        Callable<Object> task = new Callable<Object>() {
+            public Object call() throws Exception {
+
+                Thread.sleep(4000);
+
+                Object result = "finished";
+                return result;
+            }
+        };
+
+        Future<Object> future = executor.submit(task);
+        System.out.println("task submitted");
+
+        try {
+            System.out.println(future.get());
+        } catch (InterruptedException e) {
+        } catch (ExecutionException e) {
+        }
+
+        // Thread won't be destroyed.
+    }
+}
+
+```
+上面的代码是一个最简单的线程池使用的例子，线程池接受提交上来的任务，分配给池中的线程去执行。对于任务压力的情况，JDK中一个功能完备的线程池具备这样的优先级处理策略：
+1. 请求到来首先交给coreSize内的常驻线程执行
+2.如果coreSize的线程全忙，任务被放到队列里面
+3.如果队列放满了，会新增线程，直到达到maxSize
+4.如果还是处理不过来，会把一个异常扔到RejectedExecutionHandler中去，用户可以自己设定这种情况下的最终处理策略
+
+对于大于coreSize而小于maxSize的那些线程，空闲了keepAliveTime后，会被销毁。观察上面说的优先级顺序可以看到，假如说给ExecutorService一个无限长的队列，比如LinkedBlockingQueue，那么maxSize>coreSize就是没有意义的。当采用有界队列时，如果队列push失败，则会开启maxSize-coreSize的线程，直到达到maxSize,此时根据keepAliveTime来决定是否终止这些线程。线程池的工作原理如下：
+![](./threadpool.png)
+
+除线程池这样的高级货之外，JDK5中还引入了CountDownLatch，CyclicBarrier这些并发控制组件，用以配合多线程间的协作，还有可代替synchronized的Reentrant重入锁，可谓是工具库全面升级。
+这样的类出现标志着，JDK对并发的设计已经逐步由微观转向宏观了，开始逐步重视并发程序流程，甚至是框架上的设计，这样的思路我们会在下文的JDK 7.0中继续看到。
+
+### JDK 6.0
+JDK 6.0 在JVM层对锁做了一些优化，比如锁自旋、锁消除、锁合并、轻量级锁、所偏向等，这些在JVM内部，具体细节不太了解。
+
+### JDK 7.0
+2011年的JDK 7.0进一步完善了并发流程控制的功能，比如fork-join框架，主要是提高易用性，提高性能，增加JSR 292
+
+### JDK 8.0
+JDK8引入了函数式编程思想，引入Lambda表达式，Stream API，让编程用法更加简洁，以及进一步提高性能
+```java
+
+new Thread(() -> lock.lockInstanceMethod()).start();
+
+```
+
+### JDK9.0
+
+JDK9主要是模块化（JPMS），以及进一步提高性能；还趁着模块化功能新加了jimage、jlink、jaotc等新玩意儿，以及新增jshell改善易用性；
