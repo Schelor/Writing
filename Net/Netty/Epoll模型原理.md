@@ -6,7 +6,7 @@ select和poll模型会从用户态空间全量复制所有的连接(Socket)到�
 epoll模型把原来一个select和poll模型拆分成3个部分。调用epoll_create函数来建立一个epoll对象，然后再调用epoll_ctl函数向epoll对象添加或删除连接(来自客户端与服务端的Socket), 最后调用epoll_wait来收集发生事件的连接(一般是该连接上的写就绪事件，读就绪事件). 因此在同一时刻收集到的实际活动的连接并非巨量, 在这一层上优化效率。
 
 当进程调用epoll_create函数时，Linux内核会创建一个eventpoll结构体，这个结构体有两个成员与epoll的使用方式密切相关，结构体主要定义如下：
-```
+```c++
 struct eventpoll {
 
   红黑树根节点,树中存储所有添加到epoll对象的连接
@@ -22,7 +22,8 @@ struct eventpoll {
 
 每一个epoll对象都有一个独立的eventpoll结构体,这个结构体在内核空间中创建独立的内存,用以存储使用epoll_ctl方法想epoll对象中添加进来的连接与事件类型,这些数据封装成epitem结构体中，然后在挂到红黑树中。利用红黑树的平衡性质与去重性质，可以识别重复添加的连接。
 所有添加到epoll中的连接都会与设备(网卡)驱动程序建立回调关系，相应的事件发生时会回调对应的方法，这个回调方法在内核中叫ep_poll_callback, 他会把产生事件的连接放到rdllist双向链表中，便于返回给应用可用的连接集合。epitem结构体主要代码如下：
-```
+
+```c++
 struct epitem {
   红黑树的节点
   struct rb_node rbn;
@@ -39,23 +40,23 @@ struct epitem {
   每个连接注册的感兴趣的事件类型
   struct epoll_event event;
 }
-
 ```
 
 当应用调用epoll_wait检查是否有产生事件的连接时，内核只需要检查eventpoll对象中的rdllist双向链表是否有epitem节点，如果链表不为空，则把链表中的epitem复制到用户态内存中，同时返回可用的连接集合给应用。
 
 #### 如何使用epoll
 epoll模型通过下面3个系统调用为应用提供服务
+
 (1) epoll_create系统调用
 epoll_create在C库中的原型如下：
-```
+```c
 int epoll_create(int size) size表示预期的连接的大致数量，作为参考值
 
 ```
 epoll_create 返回一个epoll对象句柄，当创建好epoll句柄后，它就是会占用一个fd值，在linux下如果查看/proc/进程id/fd/，是能够看到这个fd的，所以在使用完epoll后，必须调用close()关闭，否则可能导致fd被耗尽。
 
 (2) epoll_ctl系统调用
-```
+```c
 int epoll_ctl(int epfd,int op,int fd,struct epoll_event* event);
 
 ```
@@ -70,7 +71,7 @@ epoll_ctl向epoll对象中添加，修改或删除感兴趣的事件，返回0�
 
 第三个参数是需要监听的连接fd
 第四个参数是告诉内核需要监听什么事件,使用epoll_event结构体，结构体定义如下：
-```
+```c
 struct epoll_event {
   __uint32_t events;  /* Epoll events */
   epoll_data_t data;  /* User data variable */
@@ -87,7 +88,7 @@ EPOLLET： 将EPOLL设为边缘触发(Edge Triggered)模式，这是相对于水
 EPOLLONESHOT：只监听一次事件，当监听完这次事件之后，如果还需要继续监听这个socket的话，需要再次把这个socket加入到EPOLL队列里.
 
 data是对应的epoll_data_t是一个联合体，与具体的使用方式有关，定义如下：
-```
+```c
 typedef union epoll_data {
   void *ptr;
   int fd;
@@ -97,7 +98,7 @@ typedef union epoll_data {
 
 ```
 (3) epoll_wait系统调用
-```
+```c
 int epoll_wait(int epfd,struct epoll_event* events,int maxevents,int timeout);
 
 ```
@@ -117,3 +118,4 @@ ET模式在很大程度上减少了epoll事件被重复触发的次数，因此�
 ## 参考资料
 1. 深入理解Nginx模块开发与架构解析.陶辉著
 2. http://www.cnblogs.com/Anker/archive/2013/08/17/3263780.html
+3. http://www.cnblogs.com/lojunren/p/3856290.html
