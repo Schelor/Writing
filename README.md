@@ -1,2 +1,4 @@
-# Writing
-Write what lean, what think, what feel
+# 个人写作概要
+1. 记录一些个人梳理的技术框架原理和总结
+2. 记录一些源码阅读与分析体会
+3. 后期逐步加入对生活，职业，人生的感悟
