@@ -1,7 +1,4 @@
----
-typora-copy-images-to: ./nginx_upstream_flow.png
----
-
+# Think in Nginx
 ## 概述
 Nginx是一个高性能的跨平台Web服务器,相较于传统的Web服务器，Nginx能更快的响应客户端请求，其设计具有很好的扩展性，能由多个不同功能，不同层次，不同类型且耦合度很低的模块组成。同时Nginx还能提供高可靠，低内存消耗，单机支持10万以上的并发连接的服务。
 
