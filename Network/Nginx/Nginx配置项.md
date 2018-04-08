@@ -411,7 +411,7 @@ http {
       ssl_protocols  SSLv3 TLSv1;
       ssl_ciphers  ALL:!aNULL:RC4+RSA:+HIGH:+MEDIUM:!LOW:!SSLv2:+EXP:!eNULL:!MD5:!EXPORT40;
 
-      location /{
+      location / {
               proxy_pass http://100.69.196.80:7001;
       }
       location /api {
