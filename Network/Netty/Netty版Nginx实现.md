@@ -1,6 +1,5 @@
 ## 前言
-
-Nginx典型的作用是作为反向代理服务器，为了了解反向代理的原理，因此尝试自己动手实践。技术上直接采用Netty来实现，Netty作为高性能的网络框架，提供了异步的，事件驱动的程序开发库，同时还集成了epoll网络模型实现，Http编解码的处理器等非常便利的工具API.  因此有了Netty，开发反向代理服务器便简易了许多。
+Nginx典型的作用是作为反向代理服务器，最近想了解Nginx反向代理的原理，因此尝试自己动手实践。技术上直接采用Netty来实现，Netty作为高性能的网络框架，提供了异步的，事件驱动的程序开发库，同时还集成了epoll网络模型实现，Http编解码的处理器等非常便利的工具API.  因此有了Netty，开发反向代理服务器便简易了许多。
 
 功能上对标Nginx的核心与常用功能，支持配置自定义，支持通配符的域名配置，支持Http包的编解码，支持HTTP请求头，请求URI、请求体的转发，支持上游upstream服务器的负载均衡控制等，最后还需支持代理服务器内部处理的日志配置与请求日志记录。
 
@@ -215,14 +214,13 @@ public class ServerLoggerFactory {
 参考Nginx的域名配置规则，支持全匹配，前缀匹配，后缀匹配，规则实现策略如下:
 
 - 1）如配置的serverName不带星号(`*`) , 则走全匹配，如`hello.login.daily.taobao.net`, 存储映射为：
-
-  `hello.login.daily.taobao.net -> hello.login.daily.taobao.net`
+`hello.login.daily.taobao.net -> hello.login.daily.taobao.net`
 
 - 2) 如配置的serverName前缀部分带有星号(`*`), 则走前缀匹配, 如 `.*.login.daily.taobao.net`, 存储映射为：
-  `.login.daily.taobao.net -> *.login.daily.taobao.net`
+`.login.daily.taobao.net -> *.login.daily.taobao.net`
 
-- 3) 如果配置的serverName后缀部分带有星号(`*`), 则走后缀匹配，如 login.daily.taobao.*  ,  存储映射为：
-  `login.daily.taobao. -> login.daily.taobao.*`
+- 3) 如果配置的serverName后缀部分带有星号(`*`), 则走后缀匹配，如`login.daily.taobao.*` ,存储映射为：
+`login.daily.taobao. -> login.daily.taobao.*`
 
 - 4) 不支持中间部分有星号(`*`),不支持有两个星号(`*`)
 
@@ -268,13 +266,10 @@ for (ServerBlockConf server : ConfLoader.getServerConf()) {
 ```
 
 ## 启动Server端
-
 ### HTTP连接器
-
 http连接器的功能主要是对HTTP包作编解码, 注册转发处理器：
-
 ```Java
-	/**
+	 /**
      * 编解码handler
      */
     public static final String CODEC_HANDLER_NAME = "codec_handler";
@@ -327,13 +322,13 @@ public class NettyHttpServer implements HttpServer {
         masterGroup = new NioEventLoopGroup(RuntimeContext.getWorkingPort().size());
         slaveGroup = new NioEventLoopGroup(RuntimeContext.getIoThreads());
     }
-    
+
     public void start() {
         addShutdownHook();
         initConf();
         startServer();
     }
-    
+
     private void addShutdownHook() {
         Runtime.getRuntime().addShutdownHook(new Thread(()-> {
             shutdown();
@@ -390,8 +385,8 @@ public class NettyClientUpstreamHandler extends SimpleChannelInboundHandler<Full
            ctx.writeAndFlush(createBadRequestResponse());
         }
     }
-    
-    
+
+
     private void doExecuteProxy(ChannelHandlerContext ctx, final String upstreamHost, FullHttpRequest httpRequest) throws IOException {
 
         try {
@@ -415,7 +410,6 @@ public class NettyClientUpstreamHandler extends SimpleChannelInboundHandler<Full
 ```
 
 ### 构建转发请求
-
 #### 引入Factory创建代理请求
 
 ```Java
@@ -454,13 +448,13 @@ public class NettyClientHttpRequestFactory implements InitializingBean, Disposab
             config.setConnectTimeoutMillis(this.connectTimeout);
         }
     }
-    
+
     // 创建代理请求，复用client端的Channel和线程池
     public NettyClientHttpProxyRequest createUpstreamRequest(String host) throws IOException {
 
         return new NettyClientHttpProxyRequest(getBootstrap(), getUpstreamUri(host));
     }
-	
+
     public URI getUpstreamUri(String host) {
         try {
             return new URI(host);
@@ -472,7 +466,7 @@ public class NettyClientHttpRequestFactory implements InitializingBean, Disposab
 }
 ```
 
-###异步执行转发
+### 异步执行转发
 
 ```Java
 public class NettyClientHttpProxyRequest {
@@ -483,7 +477,7 @@ public class NettyClientHttpProxyRequest {
         this.bootstrap = bootstrap;
         this.uri = uri;
     }
-    
+
     public ListenableFuture<FullHttpResponse> executeInternal(final FullHttpRequest request) {
         final SettableListenableFuture<FullHttpResponse> responseFuture =
                 new SettableListenableFuture<>();
@@ -515,7 +509,7 @@ public class NettyClientHttpProxyRequest {
         }
         return port;
     }
-	
+
     // 转换请求
     private FullHttpRequest createFullHttpRequest(final FullHttpRequest request) {
 
@@ -567,6 +561,3 @@ private static class UpstreamRequestExecuteHandler extends SimpleChannelInboundH
 ## 最后
 
 谢谢阅读, 如有兴趣，欢迎讨论。
-
-
-
