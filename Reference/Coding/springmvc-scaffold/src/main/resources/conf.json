@@ -1,0 +1,78 @@
+{
+  "user": "admin",
+  "readClientTimeout":5000,
+  "connectionTimeout":5000,
+  "events": {
+    "use": "nio",
+    "workerConnections": 2048
+  },
+  "http": {
+    "index": "index.htm index.htm",
+    "include": "",
+    "errorPages": [
+      {
+        "code": 400,
+        "uri": "http://err.taobao.com/error1.html"
+      },
+      {
+        "code": 403,
+        "uri": "http://err.taobao.com/error1.html"
+      },
+      {
+        "code": 404,
+        "uri": "http://err.taobao.com/error1.html"
+      },
+      {
+        "code": 500,
+        "uri": "http://err.taobao.com/error1.html"
+      }
+    ],
+    "accessLog": "logs/access_log.log",
+    "servers": [
+      {
+        "listen": 7777,
+        "serverName": "*.taobao.net",
+        "defaultServer": true,
+        "locations": [
+          {
+            "uriPattern": "/",
+            "proxyPass": "http://11.163.209.52:7001"
+          },
+          {
+            "uriPattern": "/login",
+            "proxyPass": "http://11.163.209.52:7001"
+          }
+        ]
+      },
+      {
+        "listen": 7777,
+        "serverName": "login.daily.taobao.*",
+        "locations": [
+          {
+            "uriPattern": "/hello/",
+            "proxyPass": "http://login_daily"
+          }
+        ]
+      },
+      {
+        "listen": 7777,
+        "serverName": "login.daily.taobao.net",
+        "locations": [
+          {
+            "uriPattern": "/login/oauth2",
+            "proxyPass": "http://login_daily"
+          }
+        ]
+      }
+    ],
+    "upstream":[
+      {
+        "name": "login_daily",
+        "servers": [
+          "11.162.252.212:80",
+          "11.163.209.52:80"
+        ]
+      }
+    ]
+  }
+}
