@@ -1,16 +1,5 @@
 # maven ignore
 target/
-*.jar
-!.mvn/wrapper/*
-*.war
-*.zip
-*.tar
-*.tar.gz
-
-# eclipse ignore
-.settings/
-.project
-.classpath
 
 # idea ignore
 .idea/
@@ -20,10 +9,6 @@ target/
 
 # temp ignore
 *.log
-*.cache
-*.diff
-*.patch
-*.tmp
 
 # system ignore
 .DS_Store
