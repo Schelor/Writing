@@ -90,8 +90,8 @@
                         <configuration>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <!--<mainClass>com.alibaba.tianchi.dubbo.meshagent.bootstrap.Bootstrap</mainClass>-->
-                                    <mainClass>com.alibaba.dubbo.mesh.agent.AppStarter</mainClass>
+                                    <!--<mainClass>Bootstrap</mainClass>-->
+                                    <mainClass>com.netty.performace.AppStarter</mainClass>
                                 </transformer>
                             </transformers>
                         </configuration>
