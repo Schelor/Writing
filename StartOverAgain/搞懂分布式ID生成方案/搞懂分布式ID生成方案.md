@@ -141,6 +141,389 @@ for (int i = 0; i < 10; i++) {
 ```
 优点是：本地生成，性能较好。缺点：不易于存储：UUID太长，16字节128位，通常以36长度的字符串表示，很多场景不适用，无顺序，不利于作DB主键。
 
+### 单数据库批量获取
+创建一个sequence表,用name表示序列名称,一般用于某业务，用value表示当前值，程序获取到当前值后在内存里缓存一个区间。区间最大值为配置的步长。关键逻辑为：
+1）程序初始化,先根据name查询value,如果不存在则初始化0.
+2）调用nextRange时，查询当前value,然后计算一个新value=oldValue+step.
+3) 最后update sequence表的value字段为newValue。
+#### 实现代码如下
+SequenceRange定义:
+```Java
+/**
+ * 定义一个从数据库获取的序列区间
+ * 该区间表示从数据库里获取一个起始值,然后加上一个步长
+ *
+ * @author xiele.xl
+ * @date 2020-05-19 18:15
+ */
+public class SequenceRange {
+
+    /**
+     * 最小值
+     */
+    private final long min;
+
+    /**
+     * 区间最大值
+     */
+    private final long max;
+
+    /**
+     * 区间记录值
+     */
+    private AtomicLong value;
+
+    /**
+     * 是否到达最大值
+     */
+    private volatile boolean over = false;
+
+    public SequenceRange(long min, long max) {
+        this.min = min;
+        this.max = max;
+
+        this.value = new AtomicLong(min);
+    }
+
+    /**
+     * 获取递增值
+     * @return
+     */
+    public long getAndIncrement() {
+
+        if (over) {
+            return -1;
+        }
+
+        long current = value.getAndIncrement();
+
+        if (current > this.max) {
+            over = true;
+            return -1;
+        }
+
+        return current;
+
+    }
+
+
+    /**
+     * Getter method for property <tt>min</tt>.
+     *
+     * @return property value of min
+     */
+    public long getMin() {
+        return min;
+    }
+
+
+    /**
+     * Getter method for property <tt>max</tt>.
+     *
+     * @return property value of max
+     */
+    public long getMax() {
+        return max;
+    }
+
+
+    /**
+     * Getter method for property <tt>over</tt>.
+     *
+     * @return property value of over
+     */
+    public boolean isOver() {
+        return over;
+    }
+
+    /**
+     * Setter method for property <tt>over</tt>.
+     *
+     * @param over value to be assigned to property over
+     */
+    public void setOver(boolean over) {
+        this.over = over;
+    }
+}
+```
+序列服务实现:
+```Java
+/**
+ * @author xiele.xl
+ * @date 2020-05-19 17:20
+ */
+public class SimpleBatchSequence implements SequenceService {
+
+    private static final String jdbc_url = "jdbc:mysql://localhost:3306/spring_demo";
+    private static final String user = "root";
+    private static final String password = "Xiele";
+
+    // 定义可见变量
+    private volatile SequenceRange range;
+
+    private static final String DEFAULT_SEQ_NAME = "default";
+
+    private static final String SELECT_SQL = "select value from sequence where name = ?";
+
+    private ReentrantLock lock = new ReentrantLock();
+
+
+    private DataSource dataSource ;
+
+    public Connection getConnection() throws SQLException {
+        return dataSource.getConnection();
+    }
+
+    public void init() throws SQLException {
+
+        DruidDataSource ds = new DruidDataSource();
+        ds.setUrl(jdbc_url);
+        ds.setUsername(user);
+        ds.setPassword(password);
+
+        ds.init();
+
+        setDataSource(ds);
+
+        initValue(DEFAULT_SEQ_NAME);
+
+    }
+
+    public void initValue(String name) throws SQLException {
+        Connection connection = null;
+        PreparedStatement pst = null;
+        ResultSet rs = null;
+        try {
+
+            connection = getConnection();
+
+            pst = connection.prepareStatement(SELECT_SQL);
+            pst.setString(1, name);
+            rs = pst.executeQuery();
+            int result = 0;
+            while (rs.next()) {
+                result++;
+            }
+            // 不存在插入初始化值
+            if (result == 0) {
+                pst = connection.prepareStatement(
+                    "insert sequence (`name`,`value`,`gmt_modified`) value (?,?,?)");
+                pst.setString(1, name);
+                pst.setLong(2, 0L);
+                pst.setTimestamp(3, new Timestamp(System.currentTimeMillis()));
+
+                final int effectedRow = pst.executeUpdate();
+                Assert.state(effectedRow == 1, "insert init value failed");
+            }
+
+        } finally {
+            closeDbResource(pst, rs, connection);
+        }
+    }
+
+    /**
+     * 获取一个序列区间
+     *
+     * @param name
+     * @return
+     * @throws SQLException
+     */
+    public SequenceRange nextRange(String name) {
+
+        Connection connection = null;
+        PreparedStatement pst = null;
+        ResultSet rs = null;
+
+        long oldValue = 0L;
+        long newValue = 0L;
+
+        // 先取出当前值
+        try {
+            connection = getConnection();
+
+            pst = connection.prepareStatement(SELECT_SQL);
+            pst.setString(1, name);
+            rs = pst.executeQuery();
+            rs.next();
+            oldValue = rs.getLong("value");
+
+            // 校验value的范围
+            if (oldValue < 0) {
+                throw new RuntimeException("not expected sequence value " + oldValue);
+            }
+
+            if (oldValue > Long.MAX_VALUE) {
+                throw new RuntimeException("sequence value is exceeded max long value");
+            }
+
+            newValue = oldValue + getStep();
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+        } finally {
+            closeDbResource(pst, rs, connection);
+        }
+
+        // 在更新新值到db里
+        try {
+            connection = getConnection();
+            pst = connection.prepareStatement(
+                "update sequence set value = ?, gmt_modified = ? where name = ? and value = ?");
+            pst.setLong(1, newValue);
+            pst.setTimestamp(2, new Timestamp(System.currentTimeMillis()));
+            pst.setString(3, name);
+            pst.setLong(4, oldValue);
+
+            Assert.state(pst.executeUpdate() == 1, "update failed");
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+
+        } finally {
+            closeDbResource(pst, rs, connection);
+        }
+
+        return new SequenceRange(oldValue + 1, newValue);
+
+    }
+
+    @Override
+    public long nextValue() {
+        if (range == null) {
+            lock.lock();
+            try {
+                if (range == null) {
+                    range = nextRange(DEFAULT_SEQ_NAME);
+                    System.err.println(String.format("初次获取Range,线程编号=%s,获取成功", Thread.currentThread().getName()));
+                }
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        long value = range.getAndIncrement();
+        // 表示本区间已取完,需要重新从db里拿一个起始值
+        // 由于存在多个线程同时来拿,因此只有一个线程可以拿成功
+        // 如果多个线程同时拿完了,并发进入==-1，再次加锁,获取下一段。
+        if (value == -1) {
+            lock.lock();
+            try {
+                for (; ; ) {
+                    if (range.isOver()) {
+                        range = nextRange(DEFAULT_SEQ_NAME);
+                        System.err.println(
+                            String.format("用完Range,再次获取Range,线程编号=%s,获取成功", Thread.currentThread().getName()));
+                    }
+                    value = range.getAndIncrement();
+                    if (value == -1) {
+                        continue;
+                    }
+                    break;
+                }
+            } finally {
+                lock.unlock();
+            }
+
+        }
+
+        return value;
+
+    }
+
+    /**
+     * 默认步长,可配置
+     *
+     * @return
+     */
+    public long getStep() {
+
+        return 1000;
+    }
+
+    /**
+     * Setter method for property <tt>dataSource</tt>.
+     *
+     * @param dataSource value to be assigned to property dataSource
+     */
+    public void setDataSource(DataSource dataSource) {
+        this.dataSource = dataSource;
+    }
+
+    private void closeDbResource(Statement st, ResultSet rs, Connection conn) {
+        closeStatement(st);
+        closeResultSet(rs);
+        closeConnection(conn);
+    }
+
+    private void closeStatement(Statement st) {
+        if (st != null) {
+            try {
+                st.close();
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private void closeResultSet(ResultSet rs) {
+        if (rs != null) {
+            try {
+                rs.close();
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private void closeConnection(Connection connection) {
+        if (connection != null) {
+            try {
+                connection.close();
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    public static void main(String[] args) throws SQLException, InterruptedException {
+
+        // 测试case1:单线程测试正确性
+        SimpleBatchSequence sequence = new SimpleBatchSequence();
+        sequence.init();
+
+        //int count = 1001;
+        //while (count-- > 0) {
+        //    System.out.println("nextVal: " + sequence.nextValue());
+        //}
+
+        // 多线程并发获取:测试并发性
+        final int nThreads = 100;
+        final ExecutorService executor = Executors.newFixedThreadPool(nThreads);
+
+        CountDownLatch latch = new CountDownLatch(nThreads);
+
+        for (int i = 0; i < nThreads; i++) {
+            executor.execute(() -> {
+                int cnt = 10;
+                while (cnt-- > 0) {
+                    System.out.println(String
+                        .format("currentThreadName:%s. nextVal: %d", Thread.currentThread().getName(),
+                            sequence.nextValue()));
+                }
+                latch.countDown();
+
+            });
+        }
+
+        latch.await();
+        System.out.println("Latch end");
+        executor.shutdown();
+        System.out.println("executor shutdown");
+        System.out.println(executor);
+
+    }
+}
+```
 
 ### 单一数据库表自增
 创建一个Sequence表,用MySQL的自增Id机制来生成序列。采用replace into 语法加select last_insert_id,由于两个sql预计不是原子的，需要包含在一个事物里。Sequence表结构如下：
