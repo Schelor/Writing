@@ -131,7 +131,7 @@ public class SnowFlake {
 }
 ```
 
-### Java UUID
+## Java UUID
 UUID(Universally Unique IDentifier)是一个全局Id的规范,标准型式包含32个16进制数字，以连字号分为五段，形式为8-4-4-4-12的36个字符.示例如:`78f236de-a628-4ea7-9382-b6030fcd8454`. 典型实现如下:
 ```Java
 for (int i = 0; i < 10; i++) {
@@ -141,12 +141,23 @@ for (int i = 0; i < 10; i++) {
 ```
 优点是：本地生成，性能较好。缺点：不易于存储：UUID太长，16字节128位，通常以36长度的字符串表示，很多场景不适用，无顺序，不利于作DB主键。
 
-### 单数据库批量获取
+## 单数据库批量获取
 创建一个sequence表,用name表示序列名称,一般用于某业务，用value表示当前值，程序获取到当前值后在内存里缓存一个区间。区间最大值为配置的步长。关键逻辑为：
 1）程序初始化,先根据name查询value,如果不存在则初始化0.
 2）调用nextRange时，查询当前value,然后计算一个新value=oldValue+step.
 3) 最后update sequence表的value字段为newValue。
-#### 实现代码如下
+### 准备表如下
+```SQL
+CREATE TABLE `sequence` (
+    `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+    `name` varchar(64) NOT NULL,
+    `value` bigint(20) NOT NULL,
+     `gmt_modified` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `unique_name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+```
+### 实现代码如下
 SequenceRange定义:
 ```Java
 /**
@@ -525,8 +536,9 @@ public class SimpleBatchSequence implements SequenceService {
 }
 ```
 
-### 单一数据库表自增
-创建一个Sequence表,用MySQL的自增Id机制来生成序列。采用replace into 语法加select last_insert_id,由于两个sql预计不是原子的，需要包含在一个事物里。Sequence表结构如下：
+## 单一数据库表自增
+创建一个Sequence表,用MySQL的自增Id机制来生成序列。采用replace into 语法加select last_insert_id,由于两个sql预计不是原子的，需要包含在一个事物里。
+### Sequence表结构如下：
 ```sql
 CREATE TABLE `sequence` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -535,7 +547,7 @@ CREATE TABLE `sequence` (
   UNIQUE KEY `uk_name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8
 ```
-事物中获取Id的SQL脚本类似如下：
+### 事物中获取Id的SQL脚本类似如下：
 ```SQL
 begin;
 replace into sequence(`name`) value ('default2');
@@ -544,7 +556,7 @@ commit;
 ```
 >注:Mysql可配置自增起始值(@@auto_increment_increment)与步长(@@auto_increment_offset)来控制Id的生成策略,不同的业务可用不同的序列表来控制对应的Id序列。
 
-#### JDBC实现代码
+### JDBC实现代码
 ```Java
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -630,3 +642,33 @@ public class SingleSequenceService implements SequenceService {
     }
 }
 ```
+## 其他方案
+### Redis原子命令实现递增
+Redis提供一些自增原子命令，可以对KEY的值进行原子的增量操作，把返回值作为新的ID。Redis自增命令有：
+INCRBY ：给key对应的value加上1，value必须是数值类型。
+INCR ：为key对应的value加上指定的增量值。
+HINCRBY ：给HASH key中的field指定的域加上指定的增量值。
+
+**方案总结**
+1. Redis方案和基于数据库的方案本质是一样的，只是发号源由数据库换成了Redis、事务由Redis的单线程机制来保证；也可以类似数据库批量方式，一次生成一批ID。
+2. Redis的ID是一个64 bit signed integer，容量可以充分保证。
+3. 可以保证ID的趋势递增，适用于主键字段
+4. 不足之处：Redis的AOF、RDB两种持久化方式都无法绝对保证数据不丢失，重启Redis有可能产生重复ID。
+
+
+### Zookeeper顺序节点实现递增
+Zookeeper作为分布式协调服务框架，提供多种类型的ZNode来存储数据，其中顺序节点（Sequence Node）可以用来生成单调自增序列。它的机制如下：
+
+在同一个路径中创建任意顺序节点（不需要同名），Zookeeper都会在节点名称中追加一个单调增长的计数值，格式是左补0的10位数字，如："0000000001"、"0000000002"等
+Zookeeper集群能保证多个客户端并发创建顺序节点时，只有一个会争抢成功，保证并发的一致性。
+顺序节点可以是持久化的，需要应用自行删除；也可以是临时的，创建该节点的客户端断开后，ZK会自动删除。两种方式都不会影响序列的增长。
+
+**方案总结**
+1. 操作简单，ID单调递增
+2. ID上限：顺序节点的序号生成是由其父节点维持的一个计数器生成的，计数器是一个4字节的signed整数，因此ID的最大值是2147483647，超出就会溢出。
+3. ZooKeeper只能顺序发号，无法批量创建ID，交易性能存在瓶颈，不适用于高并发的发号场景。
+
+## 参考
+[Leaf——美团点评分布式ID生成系统](https://tech.meituan.com/2017/04/21/mt-leaf.html?spm=ata.13261165.0.0.78d12ace8n92XX)
+
+[微信序列号生成器架构设计及演变](https://www.infoq.cn/article/wechat-serial-number-generator-architecture?spm=ata.13261165.0.0.78d12ace8n92XX)
