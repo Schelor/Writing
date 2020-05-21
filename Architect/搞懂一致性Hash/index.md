@@ -255,3 +255,181 @@ find server, key=hello,world,server=30.23.224.82:12200
 
 ```
 ## Dubbo中的一致性Hash算法分析
+下列内容摘自:Dubbo官方文档
+> 一致性 hash 算法由麻省理工学院的 Karger 及其合作者于1997年提出的，算法提出之初是用于大规模缓存系统的负载均衡。它的工作过程是这样的，首先根据 ip 或者其他的信息为缓存节点生成一个 hash，并将这个 hash 投射到 [0, 2^32 - 1] 的圆环上。当有查询或写入请求时，则为缓存项的 key 生成一个 hash 值。然后查找第一个大于或等于该 hash 值的缓存节点，并到这个节点中查询或写入缓存项。如果当前节点挂了，则在下一次查询或写入缓存时，为缓存项查找另一个大于其 hash 值的缓存节点即可。大致效果如下图所示，每个缓存节点在圆环上占据一个位置。如果缓存项的 key 的 hash 值小于缓存节点 hash 值，则到该缓存节点中存储或读取缓存项。比如下面绿色点对应的缓存项将会被存储到 cache-2 节点中。由于 cache-3 挂了，原本应该存到该节点中的缓存项最终会存储到 cache-4 节点中。
+
+一致性 hash 在 Dubbo 中的应用
+
+![](./consistent-hash-invoker.jpg)
+
+这里相同颜色的节点均属于同一个服务提供者，比如 Invoker1-1，Invoker1-2，……, Invoker1-160。这样做的目的是通过引入虚拟节点，让 Invoker 在圆环上分散开来，避免数据倾斜问题。所谓数据倾斜是指，由于节点不够分散，导致大量请求落到了同一个节点上，而其他节点只会接收到了少量请求的情况。比如:
+
+![](./consistent-hash-data-incline.jpg)
+
+如上，由于 Invoker-1 和 Invoker-2 在圆环上分布不均，导致系统中75%的请求都会落到 Invoker-1 上，只有 25% 的请求会落到 Invoker-2 上。解决这个问题办法是引入虚拟节点，通过虚拟节点均衡各个节点的请求量。
+
+### 源码分析
+>代码说明:抽象AbstractLoadBalance定义模板方法，由具体的子类实现，其中ConsistentHashLoadBalance表示一致性哈希实现的负载均衡选择算法。
+
+`AbstractLoadBalance.java`
+```Java
+@Override
+public <T> Invoker<T> select(List<Invoker<T>> invokers, URL url, Invocation invocation) {
+    if (invokers == null || invokers.isEmpty())
+        return null;
+    if (invokers.size() == 1)
+        return invokers.get(0);
+    return doSelect(invokers, url, invocation);
+}
+
+protected abstract <T> Invoker<T> doSelect(List<Invoker<T>> invokers, URL url, Invocation invocation);
+```
+
+`ConsistentHashLoadBalance.java`
+
+ConsistentHashSelector 的构造方法执行了一系列的初始化逻辑，比如从配置中获取虚拟节点数以及参与 hash 计算的参数下标，默认情况下只使用第一个参数进行 hash。需要特别说明的是，ConsistentHashLoadBalance 的负载均衡逻辑只受参数值影响，具有相同参数值的请求将会被分配给同一个服务提供者。ConsistentHashLoadBalance 不 关系权重，因此使用时需要注意一下。
+
+在获取虚拟节点数和参数下标配置后，接下来要做的事情是计算虚拟节点 hash 值，并将虚拟节点存储到 TreeMap 中。到此，ConsistentHashSelector 初始化工作就完成了。接下来，我们来看看 select 方法的逻辑。
+然后就是根据请求参数作实际的选择。代码如下:
+
+```Java
+/**
+Dubbo中一致性hash算法实现
+ * ConsistentHashLoadBalance
+ *
+ */
+public class ConsistentHashLoadBalance extends AbstractLoadBalance {
+
+    private final ConcurrentMap<String, ConsistentHashSelector<?>> selectors = new ConcurrentHashMap<String, ConsistentHashSelector<?>>();
+
+    @SuppressWarnings("unchecked")
+    @Override
+    protected <T> Invoker<T> doSelect(List<Invoker<T>> invokers, URL url, Invocation invocation) {
+        // 获取到远程调用接口的调用方法
+        String methodName = RpcUtils.getMethodName(invocation);
+        // 由于key形式为:接口名称/分组/版本，每个server提供的都是相同的，因此取第一个即可
+        String key = invokers.get(0).getUrl().getServiceKey() + "." + methodName;
+
+        // 这里用一个Map来缓存选择器,目的是复用
+        int identityHashCode = System.identityHashCode(invokers);
+        ConsistentHashSelector<T> selector = (ConsistentHashSelector<T>) selectors.get(key);
+        // 当首次选址或服务提供者的节点通过注册中心推送后，发生了变化，可能增加也可能减少，则
+        // selector.identityHashCode != identityHashCode 则成立，因此需要重新选址
+        // 重新选址时，仍然复用一致性hash算法
+        if (selector == null || selector.identityHashCode != identityHashCode) {
+            selectors.put(key, new ConsistentHashSelector<T>(invokers, methodName, identityHashCode));
+            selector = (ConsistentHashSelector<T>) selectors.get(key);
+        }
+        // 提供者列表稳定的时间里，直接从缓存里取出，直接选址，内存高效执行
+        return selector.select(invocation);
+    }
+
+    /// 这里是具体的一致性Hash实现类，采用静态内部final类，只允许当前外部类调用，禁止被继承
+    /// 当前类的职责就是运用一致性hash算法实现负载均衡选址，对外提供选址结果，不需要发布额外的数据或行为，采用内部类是一种很好的封装设计，值得学习
+    private static final class ConsistentHashSelector<T> {
+
+        // 带虚拟节点的hash 环形空间,用红黑树存储，内部排序
+        private final TreeMap<Long, Invoker<T>> virtualInvokers;
+
+        // 表示虚拟节点的数量
+        private final int replicaNumber;
+
+        // 全量提供者的唯一hashcode，用来是否服务节点是否有变化
+        private final int identityHashCode;
+
+        private final int[] argumentIndex;
+
+        /// 一致性的初始化逻辑: 初始化TreeMap,虚拟节点数据容器，默认取160
+        /// 然后对每个节点初始化160个虚拟节点
+        ConsistentHashSelector(List<Invoker<T>> invokers, String methodName, int identityHashCode) {
+            this.virtualInvokers = new TreeMap<Long, Invoker<T>>();
+            this.identityHashCode = identityHashCode;
+            URL url = invokers.get(0).getUrl();
+            this.replicaNumber = url.getMethodParameter(methodName, "hash.nodes", 160);
+            // 获取参与 hash 计算的参数下标值，默认对第一个参数进行 hash 运算
+            String[] index = Constants.COMMA_SPLIT_PATTERN.split(url.getMethodParameter(methodName, "hash.arguments", "0"));
+            argumentIndex = new int[index.length];
+            for (int i = 0; i < index.length; i++) {
+                argumentIndex[i] = Integer.parseInt(index[i]);
+            }
+            for (Invoker<T> invoker : invokers) {
+            String address = invoker.getUrl().getAddress();
+            for (int i = 0; i < replicaNumber / 4; i++) {
+                // 对 address + i 进行 md5 运算，得到一个长度为16的字节数组
+                byte[] digest = md5(address + i);
+                // 对 digest 部分字节进行4次 hash 运算，得到四个不同的 long 型正整数
+                for (int h = 0; h < 4; h++) {
+                    // h = 0 时，取 digest 中下标为 0 ~ 3 的4个字节进行位运算
+                    // h = 1 时，取 digest 中下标为 4 ~ 7 的4个字节进行位运算
+                    // h = 2, h = 3 时过程同上
+                    long m = hash(digest, h);
+                    // 将 hash 到 invoker 的映射关系存储到 virtualInvokers 中，
+                    // virtualInvokers 需要提供高效的查询操作，因此选用 TreeMap 作为存储结构
+                    virtualInvokers.put(m, invoker);
+                }
+            }
+        }
+
+        public Invoker<T> select(Invocation invocation) {
+            String key = toKey(invocation.getArguments());
+            byte[] digest = md5(key);
+            return selectForKey(hash(digest, 0));
+        }
+
+        /**
+          把调用接口的请求参数转换为字符串类型的参数Key
+          默认情况下只取第一个参数
+          相同参数会路由到相同的节点上
+        */
+        private String toKey(Object[] args) {
+            StringBuilder buf = new StringBuilder();
+            for (int i : argumentIndex) {
+                // 注: 如果argumentIndex.length=1，只执行一次
+                if (i >= 0 && i < args.length) {
+                    buf.append(args[i]);
+                }
+            }
+            return buf.toString();
+        }
+
+        private Invoker<T> selectForKey(long hash) {
+            Map.Entry<Long, Invoker<T>> entry = virtualInvokers.tailMap(hash, true).firstEntry();
+            // 如果没找到tailMap则取TreeMap的第一个Key
+            if (entry == null) {
+                entry = virtualInvokers.firstEntry();
+            }
+            return entry.getValue();
+        }
+
+        /// hash 算法,算法思想 看不懂
+        private long hash(byte[] digest, int number) {
+            return (((long) (digest[3 + number * 4] & 0xFF) << 24)
+                    | ((long) (digest[2 + number * 4] & 0xFF) << 16)
+                    | ((long) (digest[1 + number * 4] & 0xFF) << 8)
+                    | (digest[number * 4] & 0xFF))
+                    & 0xFFFFFFFFL;
+        }
+
+        /// 这里的md5 函数事实上可以抽取到Util中,放到这里感觉不优雅
+        private byte[] md5(String value) {
+            MessageDigest md5;
+            try {
+                md5 = MessageDigest.getInstance("MD5");
+            } catch (NoSuchAlgorithmException e) {
+                throw new IllegalStateException(e.getMessage(), e);
+            }
+            md5.reset();
+            byte[] bytes;
+            try {
+                bytes = value.getBytes("UTF-8");
+            } catch (UnsupportedEncodingException e) {
+                throw new IllegalStateException(e.getMessage(), e);
+            }
+            md5.update(bytes);
+            return md5.digest();
+        }
+
+    }
+
+}
+```
