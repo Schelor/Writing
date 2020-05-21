@@ -47,6 +47,7 @@
 ### Hash算法选择
 在分布式集群部署场景下，服务器的IP或`host name`都有一定的相似性，采用Java里默认String重写的hashCode，分散性差，大多的server的hashcode相差不大，因此无法做到很好的均衡效果。示例：
 
+```java
 @Test
 public void testUserStringHashCode() {
     System.out.println("192.168.0.0的哈希值：" + "192.168.0.0".hashCode());
@@ -56,15 +57,16 @@ public void testUserStringHashCode() {
     System.out.println("192.168.0.4的哈希值：" + "192.168.0.4".hashCode());
 }
 
-```Java
 192.168.0.0的哈希值：55965011
 192.168.0.1的哈希值：55965012
 192.168.0.2的哈希值：55965013
 192.168.0.3的哈希值：55965014
 192.168.0.4的哈希值：55965015
 ```
+
 环形空间的范围为[0, 2^32-1],最大值为4294967295,当前server的分布只占据了一小范围,可见分布在环形空间太密集，不分散。很容易造成大量请求都落到部分的节点上。
-综上，String重写的hashCode()方法在一致性Hash算法中没有任何实用价值，得找个算法重新计算HashCode。这种重新计算Hash值的算法有很多，比如CRC32_HASH、FNV1_32_HASH、KETAMA_HASH等，其中KETAMA_HASH是默认的MemCache推荐的一致性Hash算法，用别的Hash算法也可以，比如FNV1_32_HASH算法的计算效率就会高一些。
+
+>综上，String重写的hashCode()方法在一致性Hash算法中没有任何实用价值，得找个算法重新计算HashCode。这种重新计算Hash值的算法有很多，比如CRC32_HASH、FNV1_32_HASH、KETAMA_HASH等，其中KETAMA_HASH是默认的MemCache推荐的一致性Hash算法，用别的Hash算法也可以，比如FNV1_32_HASH算法的计算效率就会高一些。
 
 ### 一致性Hash算法实现版本：不带虚拟节点与带虚拟节点
 ```Java
