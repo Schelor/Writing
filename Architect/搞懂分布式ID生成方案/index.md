@@ -141,12 +141,14 @@ for (int i = 0; i < 10; i++) {
 ```
 优点是：本地生成，性能较好。缺点：不易于存储：UUID太长，16字节128位，通常以36长度的字符串表示，很多场景不适用，无顺序，不利于作DB主键。
 
-## 单数据库批量获取
+## 数据库批量获取
 创建一个sequence表,用name表示序列名称,一般用于某业务，用value表示当前值，程序获取到当前值后在内存里缓存一个区间。区间最大值为配置的步长。关键逻辑为：
 1）程序初始化,先根据name查询value,如果不存在则初始化0.
 2）调用nextRange时，查询当前value,然后计算一个新value=oldValue+step.
 3) 最后update sequence表的value字段为newValue。
-### 准备表如下
+
+### 单数据库批量获取实现
+**准备数据库表**
 ```SQL
 CREATE TABLE `sequence` (
     `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -535,6 +537,25 @@ public class SimpleBatchSequence implements SequenceService {
     }
 }
 ```
+### 多数据库实例的批量获取
+实际工程应用中需要构建多数据源集群来保证高可用，可扩展的发号能力。
+多数据源要解决的问题同样是各个数据源要确保生成互不重叠的ID序列，即将原来的自然数序列分成若干份互不相交的子等差数列。实现原理如下：把一个大批量ID段（外步长）按数据源分成多个小批量ID段（内步长），每个dataSource每次分配一个内步长的ID段，然后按照外步长跃进；通过这种错位交替分配策略，可以使不同dataSource产生的ID段互不相交。
+在这种场景下，有多个db里有相同的Sequence表，涉及到内步长`innerStep`与外步长`outStep`。
+
+![](./multi_datasource_step.png)
+
+#### 实现代码思路
+**初始化阶段:**
+1.  配置数据库实例数量`dsCount`，内部长`innerStep`,默认为1000, 计算外步长`outStep=dsCount * innerStep`.
+2. 自动调节sequence表：
+如果sequence里无初始值，则分别初始化每个db实例里的初始值。例如:以内步长为1000，dsCount=2为例,则ds1库里Sequence表里的value序列应该为为0，1000.ds2库里Sequence表里的value序列应该为1000,2000
+如果已经存在value,验证当前value是否需要重新需要校正一下。
+
+**获取Range阶段**
+> 随机从ds里拿取一个value,然后计算一下newValue=value+outStep,在update value为newValue.
+
+![](./group_sequence_next_range.jpg)
+
 
 ## 单一数据库表自增
 创建一个Sequence表,用MySQL的自增Id机制来生成序列。采用replace into 语法加select last_insert_id,由于两个sql预计不是原子的，需要包含在一个事物里。

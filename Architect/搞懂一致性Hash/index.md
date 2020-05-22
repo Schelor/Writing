@@ -70,9 +70,30 @@ public void testUserStringHashCode() {
 
 ### 一致性Hash算法实现版本：不带虚拟节点与带虚拟节点
 ```Java
+/**
+ * @author xiele.xl
+ * @date 2020-05-21 14:54
+ */
 public class ConsistentHash {
 
-    private final TreeMap<Integer, String> ring = new TreeMap<>();
+    private final TreeMap<Integer, Server> ring = new TreeMap<>();
+
+
+    private static final class Server {
+
+        private String url;
+
+        public Server(String url) {
+            this.url = url;
+        }
+
+        @Override
+        public String toString() {
+            return "Server{" +
+                "url='" + url + '\'' +
+                '}';
+        }
+    }
 
     /**
      * 初始化hash环
@@ -80,12 +101,12 @@ public class ConsistentHash {
      *
      * @param servers
      */
-    public void initRing(List<String> servers) {
+    public void initRing(List<Server> servers) {
 
         servers.stream().forEach(item -> {
-                final int hash = getHash(item);
-                System.out.println(String.format("server node=%s, hash=%s", item, hash));
-                ring.put(hash, item);
+                final int hash = getHash(item.url);
+                System.out.println(String.format("server node=%s, hash=%s", item.url, hash));
+                ring.put(hash, new Server(item.url));
             }
         );
 
@@ -95,13 +116,13 @@ public class ConsistentHash {
      * 初始化带虚拟节点的Server
      * @param servers
      */
-    public void initRingWithVirtualNode(List<String> servers) {
+    public void initRingWithVirtualNode(List<Server> servers) {
         servers.stream().forEach(item -> {
                 for (int i = 0; i < 10; i++) {
-                    String newItem = item + "#" + i;
+                    String newItem = item.url + "#" + i;
                     final int hash = getHash(newItem);
                     System.out.println(String.format("server node=%s, vnode=%s,hash=%s", item, newItem,  hash));
-                    ring.put(hash, newItem);
+                    ring.put(hash, new Server(newItem));
                 }
 
             }
@@ -114,48 +135,17 @@ public class ConsistentHash {
      * @param key
      * @return
      */
-    public String findServer(String key) {
+    public Server findServer(String key) {
 
         final int hashForKey = getHash(key);
         System.out.println("request key hash=" + hashForKey);
-        SortedMap<Integer, String> subMap = ring.tailMap(hashForKey);
-        if (subMap == null || subMap.isEmpty()) {
-            return ring.get(ring.firstKey());
-        }
-        Integer targetKey = subMap.firstKey();
-        // 如果返回的tailMap的第一个key为null, 则取ring的第一个key
-        if (targetKey == null) {
-            targetKey = ring.firstKey();
-        }
-        return ring.get(targetKey);
 
-    }
-
-
-    /**
-     * 根据请求的key查找对应的server node
-     *
-     * @param key
-     * @return
-     */
-    public String findServerWithVirtualNode(String key) {
-
-        final int hashForKey = getHash(key);
-        System.out.println("request key hash=" + hashForKey);
-        SortedMap<Integer, String> subMap = ring.tailMap(hashForKey);
-        Integer targetKey;
-        if (subMap == null || subMap.isEmpty()) {
-            targetKey = ring.firstKey();
-        } else {
-            targetKey = subMap.firstKey();
-            // 如果返回的tailMap的第一个key为null, 则取ring的第一个key
-            if (targetKey == null) {
-                targetKey = ring.firstKey();
-            }
+        Entry<Integer, Server> entry = ring.tailMap(hashForKey, true).firstEntry();
+        if (entry == null) {
+            entry = ring.firstEntry();
         }
 
-        String vnode = ring.get(targetKey);
-        return vnode.substring(0, vnode.indexOf("#"));
+        return entry.getValue();
 
     }
 
@@ -185,20 +175,21 @@ public class ConsistentHash {
     @Test
     public void testFindServer() {
 
-    ConsistentHash ch = new ConsistentHash();
-    ch.initRingWithVirtualNode(new ArrayList<>(Arrays.asList(
-        "30.23.224.81:12200",
-        "30.23.224.82:12200",
-        "30.23.224.83:12200",
-        "30.23.224.84:12200",
-        "30.23.224.85:12200"
-    )));
+        ConsistentHash ch = new ConsistentHash();
+        ch.initRingWithVirtualNode(new ArrayList<>(Arrays.asList(
+            new Server("30.23.224.81:12200"),
+            new Server("30.23.224.82:12200"),
+            new Server("30.23.224.83:12200"),
+            new Server("30.23.224.84:12200"),
+            new Server("30.23.224.85:12200")
+        )));
 
-    String key = "hello,world";
-    String server = ch.findServerWithVirtualNode(key);
+        String key = "hello,world";
+        Server server = ch.findServer(key);
 
-    System.out.println(String.format("find server, key=%s,server=%s", key, server));
-}
+        System.out.println(String.format("find server, key=%s,server=%s", key, server));
+    }
+
 }
 
 运行结果:
@@ -373,8 +364,12 @@ public class ConsistentHashLoadBalance extends AbstractLoadBalance {
         }
 
         public Invoker<T> select(Invocation invocation) {
+            // 将参数转为 key
             String key = toKey(invocation.getArguments());
+            // 对参数 key 进行 md5 运算
             byte[] digest = md5(key);
+            // 取 digest 数组的前四个字节进行 hash 运算，再将 hash 值传给 selectForKey 方法，
+            // 寻找合适的 Invoker
             return selectForKey(hash(digest, 0));
         }
 
@@ -395,8 +390,10 @@ public class ConsistentHashLoadBalance extends AbstractLoadBalance {
         }
 
         private Invoker<T> selectForKey(long hash) {
+            // 在TreeMap中查找第一个大于或等于当前hash的Invoker
             Map.Entry<Long, Invoker<T>> entry = virtualInvokers.tailMap(hash, true).firstEntry();
-            // 如果没找到tailMap则取TreeMap的第一个Key
+            // 如果当前hash大于TreeMap中的所有key,则tailMap返回null.
+            // 这种情况取TreeMap的第一个Key也就是头结点
             if (entry == null) {
                 entry = virtualInvokers.firstEntry();
             }
