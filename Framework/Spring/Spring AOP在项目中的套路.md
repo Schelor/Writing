@@ -49,8 +49,8 @@ public class RPCConsumerAspect extends AspectForLogger {
 代码逻辑很容易读懂，凡是涉及到RPC调用的接口，我们都希望记录入参和调用结果。如果在每个方法都作单独的日志，那将是不小的工作量。
 
 再看看UMP使用注解的方式来添加监控的示例, 调用方式为：
-``` 
-@JProfiler(jAppName = APP_NAME, jKey = SERVICESOAPADAPTER_ISCANCELED, 
+```
+@JProfiler(jAppName = APP_NAME, jKey = SERVICESOAPADAPTER_ISCANCELED,
 mState = { JProEnum.TP, JProEnum.FunctionError })
 ```
 其解析的切面为`com.jd.ump.annotation.JAnnotation`, 打开其源码就可以知道, 这个切面主要是检测方法上是否有`@JProfiler`注解，然后校验参数。最后则是添加UMP的监控，其中很熟悉的模式为：
@@ -64,7 +64,7 @@ mState = { JProEnum.TP, JProEnum.FunctionError })
     } finally {
         Profiler.registerInfoEnd(callerInfo);
     }
-    
+
 ```
 `@JProfiler`或许带来了一点便利，但是处处都是`@JProfiler`，还要指定APP_NAME, 编写很多Key, 会不会很累？
 
@@ -87,23 +87,23 @@ mState = { JProEnum.TP, JProEnum.FunctionError })
      */
     @Aspect
     public class ServiceAspectBean implements InitializingBean {
-    
+
         private String appName;
         private String systemKey;
         private String jvmKey;
         protected TransactionTemplate transactionTemplate;
-    
+
         static final Logger logger = LoggerFactory.getLogger(ServiceAspectBean.class);
-    
+
         @Pointcut("execution(* com.jd.ka.nest.service..*.*(..))")
         public void enableServicePoint() {}
-    
+
         @Around("enableServicePoint()")
         public Object executeInTransation(ProceedingJoinPoint pjp) throws Throwable {
               final Method method = this.getMethod(pjp);
               return doProceed(pjp, methodName);
         }
-        
+
         private Object doProceed(ProceedingJoinPoint pjp, String methodName) throws Throwable {
             String className = pjp.getTarget().getClass().getName();
             Object result = null;
@@ -119,18 +119,18 @@ mState = { JProEnum.TP, JProEnum.FunctionError })
             }
             return result;
     }
-            
+
     ```
 - [ ] 一般还有很多其他可应用切面的场景，例如：
    > Authentication 权限  Caching 缓存 Context passing 内容传递 Error handling 错误处理 Lazy loading　懒加载 Debugging　　调试 logging, tracing, profiling and monitoring　记录跟踪　优化　校准 Performance optimization　性能优化 Persistence　　持久化 Resource pooling　资源池 Synchronization　同步 Transactions 事务
 
     `注：上述几个场景来自于网络`
 - [ ] 来自Spring官方文档中的一个切面
-    
+
     ```
     @Aspect
     public class SystemArchitecture {
-        
+
       @Pointcut("within(com.xyz.someapp.web..*)")
       public void inWebLayer() {} //Web层横切点
 
@@ -147,7 +147,7 @@ mState = { JProEnum.TP, JProEnum.FunctionError })
       public void dataAccessOperation() {}
 
    }
-    
+
     ```
 ### 如果不知道怎么用
 
@@ -168,18 +168,18 @@ public class BeforeAdvice {
 
     @Pointcut("execution(boolean *.create(..))")
     public void before(){}
-    
+
     @Before("before()")
     public void setUpResourceBefore(JoinPoint joinPoint) throws Throwable {
         if (recource != null && !recource.exists()) {
 
         }
     }
-    
+
     //也可以这么写
     @Before("execution(boolean *.create(..))")
     public void setUpResourceBefore2(JoinPoint joinPoint) throws Throwable {
-       
+
     }
 }
 ```
@@ -195,6 +195,7 @@ public class AfterFinallyAdvice {
 }
 ```
 - 环绕型处理`@Around`
+
 ```
 /**
  * @author Xie le
@@ -258,7 +259,7 @@ private static class MyInvokationHandler implements InvocationHandler {
                 target.getClass().getInterfaces(), new MyInvokationHandler(target));
     }
 }
-    
+
 ```
 客户端调用代码：
 ```
@@ -319,9 +320,9 @@ public class MethodAdvisor implements MethodInterceptor {
 `Spring Ioc` 统一把预初始化、创建Bean的职责都委托给了BeanFactory，默认是由`DefaultListableBeanFactory`来实现。而Bean工厂创建Bean的流程简述如下：
 
 ```
-getBean -> doGetBean-> 从缓存中取已创建好的Bean -> 没有取到则创建 
--> 依赖检查 -> 递归创建依赖Bean -> 创建Bean本身 -> 依赖注入 
--> 初始化Bean ->  应用后处理器(BeanPostProcessor) 
+getBean -> doGetBean-> 从缓存中取已创建好的Bean -> 没有取到则创建
+-> 依赖检查 -> 递归创建依赖Bean -> 创建Bean本身 -> 依赖注入
+-> 初始化Bean ->  应用后处理器(BeanPostProcessor)
 
 ```
 上述步骤只有大概的步骤，我忽略的很多细节。有了上述流程后，再来分析AOP的原理。
@@ -333,7 +334,7 @@ getBean -> doGetBean-> 从缓存中取已创建好的Bean -> 没有取到则创�
 表示要启用AspectJ AOP,Spring启动时会注册一个`AnnotationAwareAspectJAutoProxyCreator`, 而这个类则由父类间接的实现了`BeanPostProsessor`。
 因此Spring创建所有的Bean时，都会经由AnnotationAwareAspectJAutoProxyCreator作后置处理, 如果有必要，则会为Bean创建AOP代理。而是否有必要的条件是，获取到系统中所有切面并检查是否目标Bean满足切面的应有范围。我们看看`AnnotationAwareAspectJAutoProxyCreator`的`postProcessAfterInitialization`方法。
 ```
-/* 
+/*
  * 如果Bean满足被代理的条件，则需要为其创建代理对象，并设置相应的拦截器
  */
 public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
@@ -372,7 +373,7 @@ public AopProxy createAopProxy(AdvisedSupport config) throws AopConfigException 
 	return CglibProxyFactory.createCglibProxy(config); //创建CGLIB代理
     }
     else { //默认使用JDK 代理
-	return new JdkDynamicAopProxy(config); 
+	return new JdkDynamicAopProxy(config);
     }
 }
 ```
